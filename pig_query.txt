@@ -1,0 +1,19 @@
+Register 'scripts/treeData.py' using jython as journey;
+DEFINE LOAD_IDM com.tfs.idm.pig.IDMEventLoadFunc('hdfs:///lib/idm-schemas/eventIdmSchema_current.avsc');
+data = LOAD '/raw/prod/rtdp/idm/events/year=2015/month=04/day={20,21}/*/*/*.avro' using LOAD_IDM;
+upsData = FILTER data BY header.channel == 'SPEECH' and header.clientId == 'UnitedParcelService';
+uspRecoData = FILTER upsData BY specificEventType == 'SpeechPlatformRecognitionEvent';
+startCallData = FILTER upsData BY specificEventType == 'SpeechPlatformCallStartEvent';
+startInfo = FOREACH startCallData GENERATE header.channelSessionId as uuid, header.timeEpochMillisUTC as startTime;
+endCallData = FILTER upsData BY specificEventType == 'SpeechPlatformCallEndEvent';
+endCallInfo = FOREACH endCallData GENERATE header.channelSessionId as uuid, header.timeEpochMillisUTC as endTime;
+upsRecoInfo = FOREACH uspRecoData GENERATE header.channelSessionId as uuid, header.optSequence as sequence, body#'vxmlField' as node, body#'outcome' as outcome, body#'optResult'#'optVxmlResult'#'optMatchValue' as matchValue;
+groupInfo = GROUP upsRecoInfo BY uuid;
+journeyData = FOREACH groupInfo {
+				sortData = ORDER upsRecoInfo BY sequence;
+				flow = journey.insertTurn(sortData);
+				GENERATE FLATTEN(flow);
+				};
+callData = JOIN startInfo BY uuid, endCallInfo BY uuid, journeyData BY uuid;
+callInfo = FOREACH callData GENERATE $4,$5,$6,$7,$8,$9;
+STORE callInfo INTO '/user/jjonnada/upsTreeData';
